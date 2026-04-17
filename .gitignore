@@ -1,1 +1,9 @@
+# Không đẩy dữ liệu nặng lên GitHub
 data/
+checkpoints/*.pth
+
+# Không đẩy môi trường ảo và rác hệ thống
+__pycache__/
+.venv/
+.vscode/
+desktop.ini
