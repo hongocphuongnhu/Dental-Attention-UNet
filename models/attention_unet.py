@@ -113,9 +113,22 @@ class AttentionUNet(nn.Module):
         return torch.sigmoid(self.output(d1))
 
 if __name__ == "__main__":
-    test_input = torch.randn((1, 1, 256, 256))
+    # 1. Khởi tạo dữ liệu giả lập (Mock data) với kích thước 256x256
+    # (1: Batch size, 1: Ảnh xám, 256, 256: Rộng x Cao)
+    test_input = torch.randn((1, 1, 256, 256)) 
+    
+    # 2. Khởi tạo mô hình
     model = AttentionUNet()
+    
+    # 3. Chạy thử (Inference test)
     output = model(test_input)
-    print(f"Input: {test_input.shape}")
-    print(f"Output: {output.shape}")
-    print("✅ Các kênh đã khớp!")
+    
+    # 4. Kiểm tra kết quả
+    print("--- KIỂM TRA KIẾN TRÚC MÔ HÌNH ---")
+    print(f"Kích thước ảnh đầu vào: {test_input.shape}")
+    print(f"Kích thước kết quả dự đoán: {output.shape}")
+    
+    if output.shape == (1, 1, 256, 256):
+        print("✅ Kết quả: Kiến trúc khớp hoàn toàn (100%)!")
+    else:
+        print("❌ Kết quả: Có lỗi sai lệch kích thước.")
