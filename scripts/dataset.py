@@ -40,4 +40,4 @@ if __name__ == "__main__":
     imgs, msks = next(iter(train_loader))
     print(f"Batch ảnh shape: {imgs.shape}") # Kỳ vọng: [16, 1, 256, 256]
     print(f"Batch mask shape: {msks.shape}")
-    print("✅ Bộ nạp dữ liệu hoạt động hoàn hảo!")
+    print("Bộ nạp dữ liệu hoạt động hoàn hảo!")

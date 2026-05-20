@@ -54,7 +54,7 @@ class AttentionUNet(nn.Module):
         # Bottleneck
         self.b = conv_block(512, 1024)
         
-        # Decoder - Chỉnh sửa lại số kênh ở đây
+        # Decoder - Chỉnh sửa lại số kênh 
         # up4: 1024 -> 512
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)
         self.ag4 = AttentionGate(F_g=512, F_l=512, F_int=256)
@@ -129,6 +129,6 @@ if __name__ == "__main__":
     print(f"Kích thước kết quả dự đoán: {output.shape}")
     
     if output.shape == (1, 1, 256, 256):
-        print("✅ Kết quả: Kiến trúc khớp hoàn toàn (100%)!")
+        print("Kết quả: Kiến trúc khớp hoàn toàn (100%)!")
     else:
-        print("❌ Kết quả: Có lỗi sai lệch kích thước.")
+        print("Kết quả: Có lỗi sai lệch kích thước.")

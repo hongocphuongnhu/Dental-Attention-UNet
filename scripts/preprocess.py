@@ -15,7 +15,7 @@ def process_data():
     files = [f for f in os.listdir(raw_img_path) if f.endswith(('.jpg', '.png', '.jpeg'))]
     total = len(files)
     
-    print(f"Bắt đầu xử lý {total} tấm ảnh... Core i9 đang tăng tốc!")
+    print(f"Bắt đầu xử lý {total} tấm ảnh...!")
 
     for i, filename in enumerate(files):
         # --- Xử lý Ảnh gốc ---
@@ -42,13 +42,13 @@ def process_data():
             save_mask_name = mask_name_no_ext + ".png"
             cv2.imwrite(os.path.join(proc_mask_path, save_mask_name), mask)
         else:
-            print(f"\n⚠️ Thiếu mask cho: {filename}")
+            print(f"\nThiếu mask cho: {filename}")
 
-        # In tiến độ ra màn hình sau mỗi 100 ảnh để không bị spam quá nhiều
+        # In tiến độ ra màn hình sau mỗi 100 ảnh đ
         if (i + 1) % 100 == 0:
             print(f"Đã xong: {i + 1}/{total} ảnh...")
 
-    print("\nHoàn thành! Dữ liệu đã sẵn sàng.")
+    print("\nHoàn thành")
 
 if __name__ == "__main__":
     process_data()

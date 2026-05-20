@@ -3,105 +3,111 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import os
+import argparse
 
-# --- Import các file của nhóm Nhu ---
-from models.attention_unet import AttentionUNet
-from scripts.dataset import DentalDataset  # Đảm bảo đường dẫn này đúng
-from scripts.metrics import get_metrics    # Nhu đổi thành utils.metrics nếu để trong thư mục utils
 
-# --- Định nghĩa Combo Loss (BCE + Dice) ---
+from models.attention_unet import AttentionUNet        
+
+from scripts.dataset import DentalDataset 
+from scripts.metrics import get_metrics
+
+# --- 2. ĐỊNH NGHĨA COMBO LOSS (BCE + DICE) ---
 class BCEDiceLoss(nn.Module):
     def __init__(self):
         super(BCEDiceLoss, self).__init__()
-        self.bce = nn.BCELoss() # Dùng BCELoss vì mô hình Nhu đã có Sigmoid ở cuối
+        self.bce = nn.BCELoss() 
 
     def forward(self, inputs, targets, smooth=1e-6):
-        # 1. Tính BCE Loss
+        # Tính BCE: Tập trung vào độ chính xác từng pixel
         bce_loss = self.bce(inputs, targets)
         
-        # 2. Tính Dice Loss
+        # Tính Dice: Tập trung vào độ khớp của vùng răng
         inputs_flat = inputs.view(-1)
         targets_flat = targets.view(-1)
         intersection = (inputs_flat * targets_flat).sum()
         dice_loss = 1 - ((2. * intersection + smooth) / (inputs_flat.sum() + targets_flat.sum() + smooth))
         
-        # 3. Kết hợp (Tỉ lệ 1:1)
         return bce_loss + dice_loss
 
-# --- Hàm Huấn Luyện Chính ---
+# --- 3. THIẾT LẬP THAM SỐ LỆNH ---
+def get_args():
+    parser = argparse.ArgumentParser(description="Chương trình huấn luyện mô hình phân đoạn tổn thương nha khoa trên ảnh X-quang")
+    parser.add_argument('--arch', type=str, default='attention_unet', 
+                        choices=['attention_unet', 'vgg_unet', 'res_unet'])
+    parser.add_argument('--save_name', type=str, default='model_best.pth')
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    return parser.parse_args()
+
+# --- 4. HÀM TRAIN CHÍNH ---
 def train_model():
-    # Cấu hình "Luật chơi"
+    args = get_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    EPOCHS = 50
-    BATCH_SIZE = 8  # Nếu i9 gào rú hoặc báo Out of Memory, Nhu hạ xuống 4 hoặc 2 nhé!
-    LR = 1e-4
+    os.makedirs("models_saved", exist_ok=True)
 
-    print(f"🚀 Bắt đầu Train hệ thống trên: {device.type.upper()}")
+    print(f"Kiến trúc: {args.arch.upper()} | Lưu tại: {args.save_name}")
 
-    # 1. Khởi tạo Băng chuyền dữ liệu (Sử dụng ảnh đã xử lý)
+    # Khởi tạo Data
     data_dir = "data/processed"
     train_ds = DentalDataset(root_dir=data_dir, split='train')
     val_ds = DentalDataset(root_dir=data_dir, split='val')
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
-    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False)
+    # Khởi tạo mô hình theo lựa chọn của từng người
+    if args.arch == 'attention_unet':
+        model = AttentionUNet(n_classes=1).to(device)
+    elif args.arch == 'vgg_unet':
+        # model = VGGUNet(n_classes=1).to(device)
+        print("Đang khởi tạo VGG-UNet...")
+        pass
+    elif args.arch == 'res_unet':
+        # model = ResNetUNet(n_classes=1).to(device)
+        print("Đang khởi tạo Res-UNet...")
+        pass
 
-    print(f"📦 Đã nạp {len(train_ds)} ảnh Train và {len(val_ds)} ảnh Validation.")
-
-    # 2. Khởi tạo Mô hình, Loss và Optimizer
-    model = AttentionUNet(n_classes=1).to(device)
     criterion = BCEDiceLoss()
-    optimizer = optim.Adam(model.parameters(), lr=LR)
-    
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
     best_dice = 0.0
-    os.makedirs("models_saved", exist_ok=True) # Tạo thư mục lưu kết quả
 
-    # 3. Bắt đầu Vòng lặp Huấn luyện
-    for epoch in range(EPOCHS):
-        # -- HUẤN LUYỆN (TRAIN) --
+    for epoch in range(args.epochs):
+        # -- TRAIN --
         model.train()
         epoch_loss = 0
-        
-        for batch_idx, (images, masks) in enumerate(train_loader):
+        for images, masks in train_loader:
             images, masks = images.to(device), masks.to(device)
-            
-            # Quá trình học
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
-            
             epoch_loss += loss.item()
 
-        # -- KIỂM TRA BÀI CŨ (VALIDATION) --
+        # -- VALIDATION --
         model.eval()
-        val_dice_total = 0
-        val_iou_total = 0
-        
-        with torch.no_grad(): # Không cập nhật gradient lúc kiểm tra
+        val_dice_total, val_iou_total = 0, 0
+        with torch.no_grad():
             for images, masks in val_loader:
                 images, masks = images.to(device), masks.to(device)
                 outputs = model(images)
-                
                 dice, iou = get_metrics(outputs, masks)
                 val_dice_total += dice
                 val_iou_total += iou
                 
-        # Tính điểm trung bình của Epoch
         avg_train_loss = epoch_loss / len(train_loader)
         avg_val_dice = val_dice_total / len(val_loader)
         avg_val_iou = val_iou_total / len(val_loader)
 
-        print(f"Epoch [{epoch+1}/{EPOCHS}] | Loss: {avg_train_loss:.4f} | Val Dice: {avg_val_dice:.4f} | Val IoU: {avg_val_iou:.4f}")
+        print(f"Epoch [{epoch+1}/{args.epochs}] | Loss: {avg_train_loss:.4f} | Val Dice: {avg_val_dice:.4f} | Val IoU: {avg_val_iou:.4f}")
 
-        # 4. Lưu lại mô hình khôn nhất
+        # Lưu lại mô hình tốt nhất
         if avg_val_dice > best_dice:
             best_dice = avg_val_dice
-            torch.save(model.state_dict(), 'models_saved/attention_unet_best.pth')
-            print(f"   🌟 Đã lưu mô hình xịn nhất mới! (Dice: {best_dice:.4f})")
+            torch.save(model.state_dict(), os.path.join("models_saved", args.save_name))
+            print(f"Saved Best Model: {best_dice:.4f}")
 
-    print("🎉 Quá trình huấn luyện đã hoàn tất!")
+    print("Hoàn tất!")
 
 if __name__ == "__main__":
     train_model()
