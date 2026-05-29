@@ -1,22 +1,31 @@
 import torch
 
+
 def get_metrics(y_pred, y_true, smooth=1e-6):
     """
-    Hàm tính toán Dice Score và IoU.
-    y_pred: Ảnh kết quả do AI vẽ (đã qua sigmoid, giá trị từ 0-1)
-    y_true: Ảnh Mask gốc của bác sĩ
+    Tính Dice Score và IoU cho bài toán binary segmentation.
+
+    Args:
+        y_pred : output thô từ model (logit, CHƯA qua sigmoid)
+        y_true : mask ground truth (giá trị 0 hoặc 1)
+        smooth : hệ số làm mịn, tránh chia cho 0
+
+    Returns:
+        (dice, iou) — tuple float trong khoảng [0, 1]
     """
-    # Ép kiểu dự đoán về 0 (Nền) hoặc 1 (Răng) với ngưỡng 0.5
+    # Bước 1: Logit -> xác suất -> nhị phân (0 hoặc 1)
+    # Phải áp sigmoid trước vì model không còn sigmoid ở output
+    y_pred = torch.sigmoid(y_pred)
     y_pred = (y_pred > 0.5).float()
     y_true = y_true.float()
 
-    # Tính phần diện tích giao nhau (Intersection)
+    # Bước 2: Tính phần giao nhau (Intersection)
     intersection = (y_pred * y_true).sum()
-    
-    # Công thức Dice Score
-    dice = (2. * intersection + smooth) / (y_pred.sum() + y_true.sum() + smooth)
-    
-    # Công thức IoU
+
+    # Dice Score: 2|A∩B| / (|A| + |B|)
+    dice = (2.0 * intersection + smooth) / (y_pred.sum() + y_true.sum() + smooth)
+
+    # IoU: |A∩B| / |A∪B|
     iou = (intersection + smooth) / (y_pred.sum() + y_true.sum() - intersection + smooth)
-    
+
     return dice.item(), iou.item()

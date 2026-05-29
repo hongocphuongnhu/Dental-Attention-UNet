@@ -4,40 +4,69 @@ from torch.utils.data import Dataset, DataLoader
 import cv2
 import numpy as np
 
+
 class DentalDataset(Dataset):
+    """
+    Dataset cho bài toán phân đoạn tổn thương nha khoa trên X-quang.
+
+    Cấu trúc thư mục kỳ vọng:
+        root_dir/
+            train/
+                images/   ← ảnh .jpg / .jpeg
+                masks/    ← mask .png
+            val/
+                images/
+                masks/
+            test/
+                images/
+                masks/
+    """
     def __init__(self, root_dir, split='train', transform=None):
-        self.img_dir = os.path.join(root_dir, split, "images")
+        self.img_dir  = os.path.join(root_dir, split, "images")
         self.mask_dir = os.path.join(root_dir, split, "masks")
-        self.images = sorted(os.listdir(self.img_dir))
+        self.images   = sorted(os.listdir(self.img_dir))
         self.transform = transform
 
     def __len__(self):
         return len(self.images)
 
     def __getitem__(self, idx):
-        # 1. Load ảnh và mask
-        img_path = os.path.join(self.img_dir, self.images[idx])
-        mask_path = os.path.join(self.mask_dir, self.images[idx].replace(".jpg", ".png").replace(".jpeg", ".png"))
+        img_name  = self.images[idx]
+        img_path  = os.path.join(self.img_dir, img_name)
 
-        image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+        # Tên mask: đổi đuôi .jpg/.jpeg -> .png (theo preprocess.py)
+        mask_name = img_name.replace(".jpg", ".png").replace(".jpeg", ".png")
+        mask_path = os.path.join(self.mask_dir, mask_name)
 
-        # 2. Chuẩn hóa pixel về khoảng [0, 1]
+        # --- Đọc ảnh xám ---
+        image = cv2.imread(img_path,  cv2.IMREAD_GRAYSCALE)
+        mask  = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
+        # Kiểm tra file tồn tại (tránh crash âm thầm khi path sai)
+        if image is None:
+            raise FileNotFoundError(f"Không đọc được ảnh: {img_path}")
+        if mask is None:
+            raise FileNotFoundError(f"Không đọc được mask: {mask_path}")
+
+        # --- Chuẩn hóa về [0, 1] ---
         image = image.astype(np.float32) / 255.0
-        mask = mask.astype(np.float32) / 255.0
+        mask  = mask.astype(np.float32)  / 255.0
 
-        # 3. Thêm chiều kênh (Channel) cho ảnh xám: (256, 256) -> (1, 256, 256)
+        # --- Thêm chiều kênh: (H, W) -> (1, H, W) ---
         image = np.expand_dims(image, axis=0)
-        mask = np.expand_dims(mask, axis=0)
+        mask  = np.expand_dims(mask,  axis=0)
 
         return torch.from_numpy(image), torch.from_numpy(mask)
 
-# --- Kiểm tra thử bộ nạp dữ liệu ---
+
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    train_ds = DentalDataset("data/processed", split='train')
+    train_ds     = DentalDataset("data/processed", split='train')
     train_loader = DataLoader(train_ds, batch_size=16, shuffle=True)
-    
+
     imgs, msks = next(iter(train_loader))
-    print(f"Batch ảnh shape: {imgs.shape}") # Kỳ vọng: [16, 1, 256, 256]
+    print(f"Batch ảnh shape : {imgs.shape}")   # [16, 1, 256, 256]
     print(f"Batch mask shape: {msks.shape}")
-    print("Bộ nạp dữ liệu hoạt động hoàn hảo!")
+    print(f"Pixel ảnh  — min: {imgs.min():.2f}, max: {imgs.max():.2f}")
+    print(f"Pixel mask — min: {msks.min():.2f}, max: {msks.max():.2f}")
+    print("DataLoader hoạt động!")
