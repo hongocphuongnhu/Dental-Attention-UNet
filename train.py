@@ -1,73 +1,150 @@
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+import os
+import argparse
 
-import sys
-sys.path.append('.')
+from models.attention_unet import AttentionUNet
+from scripts.dataset import DentalDataset
+from scripts.metrics import get_metrics
 
-from dataset import DentalDataset
-from model   import ResUNet
-from utils   import bce_dice_loss, dice_score
 
-DATA_PATH  = "/content/data/processed"
-EPOCHS     = 50
-BATCH_SIZE = 16
-LR         = 1e-3
-DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
-SAVE_PATH  = "/content/drive/MyDrive/best_model_resunet.pth"
+# ---------------------------------------------------------------------------
+# COMBO LOSS: BCEWithLogitsLoss + Dice Loss
+# ---------------------------------------------------------------------------
+# Tại sao kết hợp 2 loss?
+#   - BCEWithLogitsLoss: đánh giá từng pixel độc lập, ổn định số học
+#     (tích hợp sigmoid bên trong bằng công thức log-sum-exp, tránh NaN)
+#   - Dice Loss: đánh giá độ chồng khít toàn vùng, chống class imbalance
+#     (vùng nền ~95% pixel >> vùng tổn thương ~5%)
+# ---------------------------------------------------------------------------
+class BCEDiceLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # BCEWithLogitsLoss nhận LOGIT thô, tự áp sigmoid bên trong
+        self.bce = nn.BCEWithLogitsLoss()
 
-print(f" Training trên: {DEVICE.upper()}")
+    def forward(self, inputs, targets, smooth=1e-6):
+        # --- Phần BCE (nhận logit trực tiếp) ---
+        bce_loss = self.bce(inputs, targets)
 
-train_ds = DentalDataset(DATA_PATH, split='train')
-val_ds   = DentalDataset(DATA_PATH, split='val')
+        # --- Phần Dice (cần xác suất, phải áp sigmoid thủ công) ---
+        inputs_prob = torch.sigmoid(inputs)
+        inputs_flat = inputs_prob.view(-1)
+        targets_flat = targets.view(-1)
+        intersection = (inputs_flat * targets_flat).sum()
+        dice_loss = 1.0 - (2.0 * intersection + smooth) / (
+            inputs_flat.sum() + targets_flat.sum() + smooth
+        )
 
-pin = DEVICE == "cuda"
-train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,  num_workers=0, pin_memory=pin)
-val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE, shuffle=False, num_workers=0, pin_memory=pin)
+        return bce_loss + dice_loss
 
-print(f"Train: {len(train_ds)} ảnh | Val: {len(val_ds)} ảnh")
 
-model     = ResUNet().to(DEVICE)
+# ---------------------------------------------------------------------------
+# THAM SỐ DÒNG LỆNH
+# ---------------------------------------------------------------------------
+def get_args():
+    parser = argparse.ArgumentParser(
+        description="Huấn luyện mô hình phân đoạn tổn thương nha khoa trên X-quang"
+    )
+    parser.add_argument('--arch',       type=str,   default='attention_unet',
+                        choices=['attention_unet', 'vgg_unet', 'res_unet'])
+    parser.add_argument('--save_name',  type=str,   default='attention_unet_best.pth')
+    parser.add_argument('--epochs',     type=int,   default=50)
+    parser.add_argument('--batch_size', type=int,   default=8)
+    parser.add_argument('--lr',         type=float, default=1e-4)
+    parser.add_argument('--data_dir',   type=str,   default='data/processed')
+    return parser.parse_args()
 
-optimizer = Adam(model.parameters(), lr=LR)
-scheduler = ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
 
-best_val_loss = float('inf')
+# ---------------------------------------------------------------------------
+# VÒNG LẶP TRAIN CHÍNH
+# ---------------------------------------------------------------------------
+def train_model():
+    args   = get_args()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    os.makedirs("models_saved", exist_ok=True)
 
-for epoch in range(1, EPOCHS + 1):
-    model.train()
-    t_loss, t_dice = 0, 0
-    for imgs, masks in train_loader:
-        imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
-        optimizer.zero_grad()
-        preds = model(imgs)
-        loss  = bce_dice_loss(preds, masks)
-        loss.backward()
-        optimizer.step()
-        t_loss += loss.item()
-        t_dice += dice_score(preds.detach(), masks)
+    print(f"Thiết bị   : {device}")
+    print(f"Kiến trúc  : {args.arch.upper()}")
+    print(f"Lưu model  : models_saved/{args.save_name}")
+    print("-" * 50)
 
-    model.eval()
-    v_loss, v_dice = 0, 0
-    with torch.no_grad():
-        for imgs, masks in val_loader:
-            imgs, masks = imgs.to(DEVICE), masks.to(DEVICE)
-            preds  = model(imgs)
-            v_loss += bce_dice_loss(preds, masks).item()
-            v_dice += dice_score(preds, masks)
+    # --- Dữ liệu ---
+    train_ds     = DentalDataset(root_dir=args.data_dir, split='train')
+    val_ds       = DentalDataset(root_dir=args.data_dir, split='val')
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=2)
+    val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=2)
+    print(f"Train: {len(train_ds)} ảnh | Val: {len(val_ds)} ảnh")
 
-    n_t = len(train_loader)
-    n_v = len(val_loader)
-    scheduler.step(v_loss / n_v)
+    # --- Mô hình ---
+    if args.arch == 'attention_unet':
+        model = AttentionUNet(n_classes=1).to(device)
+    elif args.arch == 'res_unet':
+        from models.res_unet import ResUNet
+        model = ResUNet(n_classes=1).to(device)
+    else:
+        raise NotImplementedError(f"Kiến trúc '{args.arch}' chưa được implement.")
 
-    print(f"Epoch {epoch:02d}/{EPOCHS} | "
-          f"Train Loss: {t_loss/n_t:.4f}  Dice: {t_dice/n_t:.4f} | "
-          f"Val Loss: {v_loss/n_v:.4f}  Dice: {v_dice/n_v:.4f}")
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Tham số    : {total_params:,}")
+    print("-" * 50)
 
-    if v_loss / n_v < best_val_loss:
-        best_val_loss = v_loss / n_v
-        torch.save(model.state_dict(), SAVE_PATH)
-        print(f" Saved best model!")
+    # --- Loss, Optimizer ---
+    criterion = BCEDiceLoss()
+    optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-print("\n Training hoàn tất! Model lưu tại:", SAVE_PATH)
+    best_dice = 0.0
+
+    for epoch in range(args.epochs):
+
+        # ── TRAIN ──────────────────────────────────────────────────────────
+        model.train()
+        epoch_loss = 0.0
+        for images, masks in train_loader:
+            images, masks = images.to(device), masks.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)          # logit thô
+            loss    = criterion(outputs, masks)
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+
+        # ── VALIDATION ─────────────────────────────────────────────────────
+        model.eval()
+        val_dice_total = 0.0
+        val_iou_total  = 0.0
+        with torch.no_grad():
+            for images, masks in val_loader:
+                images, masks = images.to(device), masks.to(device)
+                outputs = model(images)      # logit thô
+                dice, iou = get_metrics(outputs, masks)
+                val_dice_total += dice
+                val_iou_total  += iou
+
+        avg_loss = epoch_loss     / len(train_loader)
+        avg_dice = val_dice_total / len(val_loader)
+        avg_iou  = val_iou_total  / len(val_loader)
+
+        print(
+            f"Epoch [{epoch+1:02d}/{args.epochs}] "
+            f"| Loss: {avg_loss:.4f} "
+            f"| Val Dice: {avg_dice:.4f} "
+            f"| Val IoU: {avg_iou:.4f}"
+        )
+
+        # ── LƯU MODEL TỐT NHẤT ─────────────────────────────────────────────
+        if avg_dice > best_dice:
+            best_dice = avg_dice
+            save_path = os.path.join("models_saved", args.save_name)
+            torch.save(model.state_dict(), save_path)
+            print(f"           Saved best model — Dice: {best_dice:.4f}")
+
+    print("=" * 50)
+    print(f"Hoàn tất! Best Val Dice: {best_dice:.4f}")
+    print(f"Model đã lưu tại: models_saved/{args.save_name}")
+
+
+if __name__ == "__main__":
+    train_model()
