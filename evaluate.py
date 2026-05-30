@@ -105,10 +105,12 @@ def evaluate():
     print("-" * 50)
 
     # --- Tải model ---
-    model = AttentionUNet(n_classes=1).to(device)
+    if 'res_unet' in args.model_path:
+        from models.res_unet import ResUNet
+        model = ResUNet(n_classes=1).to(device)
+    else:
+        model = AttentionUNet(n_classes=1).to(device)
     model.load_state_dict(torch.load(args.model_path, map_location=device))
-    model.eval()
-    print("Tải model thành công!")
 
     # --- Tập test ---
     test_ds     = DentalDataset(root_dir=args.data_dir, split='test')
