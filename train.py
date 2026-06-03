@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import os
+import csv
 import argparse
 
 from models.attention_unet import AttentionUNet
@@ -10,26 +11,13 @@ from scripts.dataset import DentalDataset
 from scripts.metrics import get_metrics
 
 
-# ---------------------------------------------------------------------------
-# COMBO LOSS: BCEWithLogitsLoss + Dice Loss
-# ---------------------------------------------------------------------------
-# Tại sao kết hợp 2 loss?
-#   - BCEWithLogitsLoss: đánh giá từng pixel độc lập, ổn định số học
-#     (tích hợp sigmoid bên trong bằng công thức log-sum-exp, tránh NaN)
-#   - Dice Loss: đánh giá độ chồng khít toàn vùng, chống class imbalance
-#     (vùng nền ~95% pixel >> vùng tổn thương ~5%)
-# ---------------------------------------------------------------------------
 class BCEDiceLoss(nn.Module):
     def __init__(self):
         super().__init__()
-        # BCEWithLogitsLoss nhận LOGIT thô, tự áp sigmoid bên trong
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(self, inputs, targets, smooth=1e-6):
-        # --- Phần BCE (nhận logit trực tiếp) ---
         bce_loss = self.bce(inputs, targets)
-
-        # --- Phần Dice (cần xác suất, phải áp sigmoid thủ công) ---
         inputs_prob = torch.sigmoid(inputs)
         inputs_flat = inputs_prob.view(-1)
         targets_flat = targets.view(-1)
@@ -37,17 +25,11 @@ class BCEDiceLoss(nn.Module):
         dice_loss = 1.0 - (2.0 * intersection + smooth) / (
             inputs_flat.sum() + targets_flat.sum() + smooth
         )
-
         return bce_loss + dice_loss
 
 
-# ---------------------------------------------------------------------------
-# THAM SỐ DÒNG LỆNH
-# ---------------------------------------------------------------------------
 def get_args():
-    parser = argparse.ArgumentParser(
-        description="Huấn luyện mô hình phân đoạn tổn thương nha khoa trên X-quang"
-    )
+    parser = argparse.ArgumentParser()
     parser.add_argument('--arch',       type=str,   default='attention_unet',
                         choices=['attention_unet', 'vgg_unet', 'res_unet'])
     parser.add_argument('--save_name',  type=str,   default='attention_unet_best.pth')
@@ -58,64 +40,62 @@ def get_args():
     return parser.parse_args()
 
 
-# ---------------------------------------------------------------------------
-# VÒNG LẶP TRAIN CHÍNH
-# ---------------------------------------------------------------------------
 def train_model():
     args   = get_args()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     os.makedirs("models_saved", exist_ok=True)
+    os.makedirs("logs", exist_ok=True)
 
     print(f"Thiết bị   : {device}")
     print(f"Kiến trúc  : {args.arch.upper()}")
     print(f"Lưu model  : models_saved/{args.save_name}")
-    print("-" * 50)
+    print("-" * 60)
 
-    # --- Dữ liệu ---
     train_ds     = DentalDataset(root_dir=args.data_dir, split='train')
     val_ds       = DentalDataset(root_dir=args.data_dir, split='val')
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True,  num_workers=2)
     val_loader   = DataLoader(val_ds,   batch_size=args.batch_size, shuffle=False, num_workers=2)
-    print(f"Train: {len(train_ds)} ảnh | Val: {len(val_ds)} ảnh")
+    print(f"Train: {len(train_ds)} anh | Val: {len(val_ds)} anh")
 
-    # --- Mô hình ---
     if args.arch == 'attention_unet':
         model = AttentionUNet(n_classes=1).to(device)
     else:
-        raise NotImplementedError(f"Kiến trúc '{args.arch}' chưa được implement.")
+        raise NotImplementedError(f"Kien truc '{args.arch}' chua duoc implement.")
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Tham số    : {total_params:,}")
-    print("-" * 50)
+    print(f"Tham so    : {total_params:,}")
+    print("-" * 60)
 
-    # --- Loss, Optimizer ---
     criterion = BCEDiceLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-
     best_dice = 0.0
 
-    for epoch in range(args.epochs):
+    log_path = os.path.join("logs", args.save_name.replace(".pth", "_log.csv"))
+    log_file = open(log_path, "w", newline="", encoding="utf-8")
+    log_writer = csv.writer(log_file)
+    log_writer.writerow(["epoch", "train_loss", "val_dice", "val_iou"])
+    print(f"Log CSV    : {log_path}")
+    print("=" * 60)
 
-        # ── TRAIN ──────────────────────────────────────────────────────────
+    for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
         for images, masks in train_loader:
             images, masks = images.to(device), masks.to(device)
             optimizer.zero_grad()
-            outputs = model(images)          # logit thô
+            outputs = model(images)
             loss    = criterion(outputs, masks)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
 
-        # ── VALIDATION ─────────────────────────────────────────────────────
         model.eval()
         val_dice_total = 0.0
         val_iou_total  = 0.0
         with torch.no_grad():
             for images, masks in val_loader:
                 images, masks = images.to(device), masks.to(device)
-                outputs = model(images)      # logit thô
+                outputs = model(images)
                 dice, iou = get_metrics(outputs, masks)
                 val_dice_total += dice
                 val_iou_total  += iou
@@ -128,19 +108,22 @@ def train_model():
             f"Epoch [{epoch+1:02d}/{args.epochs}] "
             f"| Loss: {avg_loss:.4f} "
             f"| Val Dice: {avg_dice:.4f} "
-            f"| Val IoU: {avg_iou:.4f}"
+            f"| Val IoU:  {avg_iou:.4f}"
         )
 
-        # ── LƯU MODEL TỐT NHẤT ─────────────────────────────────────────────
+        log_writer.writerow([epoch + 1, round(avg_loss, 6),
+                             round(avg_dice, 6), round(avg_iou, 6)])
+        log_file.flush()
+
         if avg_dice > best_dice:
             best_dice = avg_dice
-            save_path = os.path.join("models_saved", args.save_name)
-            torch.save(model.state_dict(), save_path)
-            print(f"           Saved best model — Dice: {best_dice:.4f}")
+            torch.save(model.state_dict(), os.path.join("models_saved", args.save_name))
+            print(f"           Saved best model - Dice: {best_dice:.4f}")
 
-    print("=" * 50)
-    print(f"Hoàn tất! Best Val Dice: {best_dice:.4f}")
-    print(f"Model đã lưu tại: models_saved/{args.save_name}")
+    log_file.close()
+    print("=" * 60)
+    print(f"Hoan tat! Best Val Dice : {best_dice:.4f}")
+    print(f"Log CSV    : {log_path}")
 
 
 if __name__ == "__main__":
