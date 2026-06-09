@@ -46,9 +46,9 @@ def train_model():
     os.makedirs("models_saved", exist_ok=True)
     os.makedirs("logs", exist_ok=True)
 
-    print(f"Thiết bị   : {device}")
-    print(f"Kiến trúc  : {args.arch.upper()}")
-    print(f"Lưu model  : models_saved/{args.save_name}")
+    print(f"Thiet bi   : {device}")
+    print(f"Kien truc  : {args.arch.upper()}")
+    print(f"Luu model  : models_saved/{args.save_name}")
     print("-" * 60)
 
     train_ds     = DentalDataset(root_dir=args.data_dir, split='train')
@@ -73,11 +73,14 @@ def train_model():
     log_path = os.path.join("logs", args.save_name.replace(".pth", "_log.csv"))
     log_file = open(log_path, "w", newline="", encoding="utf-8")
     log_writer = csv.writer(log_file)
-    log_writer.writerow(["epoch", "train_loss", "val_dice", "val_iou"])
+    # ── Thêm cột val_loss vào header ──────────────────────────────────────
+    log_writer.writerow(["epoch", "train_loss", "val_loss", "val_dice", "val_iou"])
     print(f"Log CSV    : {log_path}")
     print("=" * 60)
 
     for epoch in range(args.epochs):
+
+        # ── TRAIN ──────────────────────────────────────────────────────────
         model.train()
         epoch_loss = 0.0
         for images, masks in train_loader:
@@ -89,30 +92,46 @@ def train_model():
             optimizer.step()
             epoch_loss += loss.item()
 
+        # ── VALIDATION ─────────────────────────────────────────────────────
         model.eval()
+        val_loss_total = 0.0   # ← THÊM MỚI
         val_dice_total = 0.0
         val_iou_total  = 0.0
+
         with torch.no_grad():
             for images, masks in val_loader:
                 images, masks = images.to(device), masks.to(device)
                 outputs = model(images)
+
+                # Tính val_loss bằng cùng hàm loss với train
+                val_loss = criterion(outputs, masks)
+                val_loss_total += val_loss.item()   # ← THÊM MỚI
+
                 dice, iou = get_metrics(outputs, masks)
                 val_dice_total += dice
                 val_iou_total  += iou
 
-        avg_loss = epoch_loss     / len(train_loader)
-        avg_dice = val_dice_total / len(val_loader)
-        avg_iou  = val_iou_total  / len(val_loader)
+        avg_train_loss = epoch_loss     / len(train_loader)
+        avg_val_loss   = val_loss_total / len(val_loader)   # ← THÊM MỚI
+        avg_dice       = val_dice_total / len(val_loader)
+        avg_iou        = val_iou_total  / len(val_loader)
 
         print(
             f"Epoch [{epoch+1:02d}/{args.epochs}] "
-            f"| Loss: {avg_loss:.4f} "
+            f"| Train Loss: {avg_train_loss:.4f} "
+            f"| Val Loss: {avg_val_loss:.4f} "   # ← THÊM MỚI
             f"| Val Dice: {avg_dice:.4f} "
             f"| Val IoU:  {avg_iou:.4f}"
         )
 
-        log_writer.writerow([epoch + 1, round(avg_loss, 6),
-                             round(avg_dice, 6), round(avg_iou, 6)])
+        # Ghi thêm cột val_loss vào CSV
+        log_writer.writerow([
+            epoch + 1,
+            round(avg_train_loss, 6),
+            round(avg_val_loss,   6),   # ← THÊM MỚI
+            round(avg_dice,       6),
+            round(avg_iou,        6),
+        ])
         log_file.flush()
 
         if avg_dice > best_dice:

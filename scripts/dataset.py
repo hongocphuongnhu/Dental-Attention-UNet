@@ -6,21 +6,6 @@ import numpy as np
 
 
 class DentalDataset(Dataset):
-    """
-    Dataset cho bài toán phân đoạn tổn thương nha khoa trên X-quang.
-
-    Cấu trúc thư mục kỳ vọng:
-        root_dir/
-            train/
-                images/   ← ảnh .jpg / .jpeg
-                masks/    ← mask .png
-            val/
-                images/
-                masks/
-            test/
-                images/
-                masks/
-    """
     def __init__(self, root_dir, split='train', transform=None):
         self.img_dir  = os.path.join(root_dir, split, "images")
         self.mask_dir = os.path.join(root_dir, split, "masks")
