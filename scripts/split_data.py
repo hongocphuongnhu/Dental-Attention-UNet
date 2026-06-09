@@ -44,8 +44,8 @@ def split_data():
             shutil.move(os.path.join(img_dir, img), os.path.join(data_path, split_name, "images", img))
             shutil.move(os.path.join(mask_dir, msk), os.path.join(data_path, split_name, "masks", msk))
 
-    print(f"✅ Đã chia xong 1500 ảnh!")
-    print(f"📂 Train: {len(train_imgs)} | Val: {len(val_imgs)} | Test: {len(test_imgs)}")
+    print(f"Đã chia xong 1500 ảnh!")
+    print(f"Train: {len(train_imgs)} | Val: {len(val_imgs)} | Test: {len(test_imgs)}")
 
 if __name__ == "__main__":
     split_data()
